@@ -8,12 +8,21 @@ use Illuminate\Support\Facades\Http;
 class XeroService
 {
     private string $authHeader;
+    private string $accessTokenHeader;
 
     public function __construct()
     {
         $clientId = config('services.xero.client_id');
         $clientSecret = config('services.xero.client_secret');
         $this->authHeader = 'Basic ' . base64_encode("$clientId:$clientSecret");
+
+        if ($this->isAccessTokenExpired()) {
+            $tokens = $this->refreshToken();
+            $this->storeTokens($tokens);
+        }
+
+        $accessToken = $this->getSetting('access_token');
+        $this->accessTokenHeader = 'Bearer ' . $accessToken;
     }
 
     public function getAuthorizationUrl(): string
@@ -41,7 +50,7 @@ class XeroService
 
     public function refreshToken(): ?array
     {
-        $refreshToken = $this->getSetting('xero_refresh_token');
+        $refreshToken = $this->getSetting('refresh_token');
         if (!$refreshToken) return null;
 
         return $this->requestToken([
@@ -52,7 +61,7 @@ class XeroService
 
     public function revokeToken(): bool
     {
-        $refreshToken = $this->getSetting('xero_refresh_token');
+        $refreshToken = $this->getSetting('refresh_token');
         if (!$refreshToken) return false;
 
         $response = Http::withHeaders([
@@ -82,16 +91,56 @@ class XeroService
     {
         foreach (['access_token', 'refresh_token', 'expires_in', 'token_type', 'scope', 'id_token'] as $key) {
             if (isset($tokenData[$key])) {
-                Setting::updateOrCreate(
-                    ['key' => "xero_$key"],
-                    ['value' => $tokenData[$key]]
-                );
+                $this->setSetting($key, $tokenData[$key]);
             }
+        }
+
+        $this->accessTokenHeader = 'Bearer ' . $tokenData['access_token'];
+    }
+
+    public function getSetting(string $key): ?string
+    {
+        return Setting::where('key', "xero_" . $key)?->value('value');
+    }
+
+    public function setSetting(string $key, mixed $value): void
+    {
+        Setting::updateOrCreate(
+            ['key' => "xero_$key"],
+            ['value' => $value]
+        );
+    }
+
+    public function isAccessTokenExpired(): bool
+    {
+        $expiresIn = $this->getSetting('expires_in');
+        return $expiresIn && time() > (time() + $expiresIn);
+    }
+
+    public function getInvoices($tenantId)
+    {
+        $response = Http::withHeaders([
+            'Authorization' => $this->accessTokenHeader,
+            'Xero-Tenant-Id' => $tenantId
+        ])->get('https://api.xero.com/api.xro/2.0/Invoices');
+        return $response->json();
+    }
+
+    public function getConnections($checkDB = true)
+    {
+        $tenants = $this->getSetting('tenants');
+        if (!empty($tenants) && $checkDB) {
+            return json_decode($tenants);
+        } else {
+            $response = Http::withHeaders([
+                'Authorization' => $this->accessTokenHeader,
+            ])->get('https://api.xero.com/connections');
+            return $response->json();
         }
     }
 
-    private function getSetting(string $key): ?string
+    public function storeConnections($tenants)
     {
-        return Setting::where('key', $key)->value('value');
+        $this->setSetting("tenants", json_encode($tenants));
     }
 }

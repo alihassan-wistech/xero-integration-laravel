@@ -33,6 +33,9 @@ class XeroController extends Controller
         if (!$tokens) abort(500, 'Failed to exchange authorization code');
 
         $this->xero->storeTokens($tokens);
+        $tenants = $this->xero->getConnections(false);
+        $this->xero->storeConnections($tenants);
+
         return redirect()->route('welcome');
     }
 
@@ -53,6 +56,4 @@ class XeroController extends Controller
 
         return redirect()->route('welcome');
     }
-
-    public function sendInvoice() {}
 }
